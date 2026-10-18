@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Configuracion de PHPUnit de Control de Obras.
+
+    DOS SUITES SEPARADAS, A PROPOSITO
+    ----------------------------------
+    `Aislamiento` corre las pruebas que comprueban que una constructora no ve
+    los datos de otra. Se puede correr sola con:
+
+        php artisan test --testsuite=Aislamiento
+
+    `Reglas` corre las reglas de negocio que sostienen el producto: que un
+    hallazgo genere su tarea de correccion con plazo, y que el avance fisico y
+    el financiero se reporten por separado.
+
+    POSTGRESQL, NO SQLITE
+    ---------------------
+    El aislamiento esta implementado con Row Level Security, que es una funcion
+    de PostgreSQL. Contra SQLite las pruebas de aislamiento PASARIAN sin
+    comprobar nada, porque no habria ninguna politica que se pueda violar.
+    Ver docs/10.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnWarning="true"
+         failOnRisky="true"
+         beStrictAboutOutputDuringTests="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+        <testsuite name="Aislamiento">
+            <directory>tests/Feature/Aislamiento</directory>
+        </testsuite>
+        <testsuite name="Reglas">
+            <directory>tests/Feature/Inspecciones</directory>
+            <directory>tests/Feature/Avances</directory>
+            <directory>tests/Feature/Seguridad</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file"/>
+        <env name="BCRYPT_ROUNDS" value="4"/>
+        <env name="CACHE_STORE" value="array"/>
+        <env name="MAIL_MAILER" value="array"/>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="SESSION_DRIVER" value="array"/>
+        <!--
+            IMPORTANTE: debe ser PostgreSQL. El aislamiento entre
+            constructoras esta implementado con Row Level Security, y en SQLite
+            esas pruebas pasan sin comprobar nada.
+        -->
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="control_obras_test"/>
+    </php>
+</phpunit>

@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# Caddy: el único puerto abierto del sistema.
+# ---------------------------------------------------------------------------
+#
+# QUEDA PENDIENTE CONFIGURAR EL DOMINIO
+# --------------------------------------
+# Hay que reemplazar `obras.ejemplo.cl` por el dominio real antes de
+# desplegar. Con el dominio de ejemplo, Caddy no va a poder emitir un
+# certificado y el sitio quedara sirviendo por HTTP.
+#
+# ---------------------------------------------------------------------------
+
+obras.ejemplo.cl {
+    encode zstd gzip
+
+    # Cabeceras de seguridad. La de permisos es restrictiva a propósito: la
+    # interfaz carga scripts y estilos propios y habla con la API por el mismo
+    # origen, no con terceros.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "same-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        -Server
+    }
+
+    # La API responde en JSON: no necesita que se le insufle HTML.
+    handle_path /api/* {
+        reverse_proxy api:8080
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

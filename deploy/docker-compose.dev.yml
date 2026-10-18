@@ -1,0 +1,182 @@
+# ---------------------------------------------------------------------------
+# Control de Obras: entorno de DESARROLLO
+# ---------------------------------------------------------------------------
+#
+# Uso:
+#   docker compose -f deploy/docker-compose.dev.yml up -d
+#
+# QUE HAY Y QUE NO HAY ACA
+# ------------------------
+# En desarrollo se publican los puertos de PostgreSQL y Redis a propósito,
+# para poder entrar por `psql` o por `redis-cli` y ver que esta pasando. En
+# produccion NO se publican: ver deploy/docker-compose.prod.yml.
+#
+# Authentik NO se incluye en este archivo. Es una pieza compartida entre varias
+# aplicaciones de Hefesto, con su propia base de datos y su propio ciclo de
+# vida, y duplicarla aca haría que cada aplicación administrara su propia
+# identidad. Ver docs/04, seccion "Authentik".
+#
+# ---------------------------------------------------------------------------
+
+name: control-obras
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: ../deploy/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_NAME: "Control de Obras"
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_KEY: ${APP_KEY:?falta APP_KEY. Genere una con php artisan key:generate}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-control_obras}
+      DB_USERNAME: ${DB_USERNAME:-control_obras}
+      DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: database
+
+      AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER:?falta AUTHENTIK_ISSUER}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:?falta AUTHENTIK_CLIENT_ID}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:?falta AUTHENTIK_CLIENT_SECRET}
+      AUTHENTIK_REDIRECT_URI: ${AUTHENTIK_REDIRECT_URI:-http://localhost:8080/api/v1/auth/retorno}
+      AUTHENTIK_ALGORITMO: ${AUTHENTIK_ALGORITMO:-RS256}
+
+      # En desarrollo se corre las migraciones al arrancar. En produccion NO:
+      # ver el comentario de este mismo bloque en docker-compose.prod.yml.
+      CONTROL_OBRAS_CORRER_MIGRACIONES: "true"
+    ports:
+      # Puerto de la API, para poder probar los endpoints a mano.
+      - "8080:8080"
+    volumes:
+      - storage-temporal:/var/www/html/storage/framework
+    logging: *logging
+
+  cola:
+    build:
+      context: ./api
+      dockerfile: ../deploy/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+      - redis
+    command:
+      ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600", "--verbose"]
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: ${APP_KEY}
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-control_obras}
+      DB_USERNAME: ${DB_USERNAME:-control_obras}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: redis
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: database
+      # El worker SIEMPRE necesita el emisor: usa la misma conexión para
+      # empresas distintas, y sin contexto fijo la RLS lo rechazaria.
+      AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER}
+    volumes:
+      - storage-temporal:/var/www/html/storage/framework
+    logging: *logging
+
+  web:
+    build:
+      context: ./web
+      dockerfile: ../deploy/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NUXT_API_BASE: http://api:8080
+      NUXT_PUBLIC_BASE: ${APP_URL:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    logging: *logging
+
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL.
+  #
+  # DOS ROLES, Y NO UNO
+  # -------------------
+  # `POSTGRES_USER` es el rol de ARRANQUE: la imagen oficial ejecuta
+  # `initdb --username="$POSTGRES_USER"` y ese rol nace superusuario. Solo
+  # se usa para crear la base y para las tareas administrativas. La
+  # aplicacion NUNCA conecta con el.
+  #
+  # El rol de la aplicacion (`DB_USERNAME`) lo crea
+  # `deploy/postgres/inicializar-rol.sh` al inicializar el volumen, con
+  # NOSUPERUSER y NOBYPASSRLS explicitos. Le da la propiedad de la base
+  # para que las migraciones de Laravel puedan crear el esquema.
+  #
+  # POR QUE IMPORTA: la documentacion de PostgreSQL 18 dice que los
+  # superusuarios "always bypass the row security system", y que
+  # `FORCE ROW LEVEL SECURITY` sujeta solo al DUENO de la tabla, no al
+  # superusuario. Con un solo rol las politicas no se aplicarian y el
+  # aislamiento entre empresas seria decorativo. Ver docs/03.
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-control_obras}
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-control_obras_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?falta DB_ADMIN_PASSWORD en el .env}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      # Rol con el que conecta la aplicacion. Lo crea el script de arranque.
+      APP_DB_ROLE: ${DB_USERNAME:-control_obras}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en el .env}
+    ports:
+      # Solo en desarrollo. En produccion la base no se pública.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-datos:/var/lib/postgresql/data
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-control_obras} -d ${DB_DATABASE:-control_obras}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  redis:
+    image: redis:8.8.3-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${REDIS_PASSWORD:?falta REDIS_PASSWORD}"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+volumes:
+  postgres-datos:
+  storage-temporal:

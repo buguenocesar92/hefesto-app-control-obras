@@ -1,0 +1,34 @@
+# Dependencias
+vendor/
+node_modules/
+/web/.output/
+/web/.nuxt/
+/web/.data/
+
+# Archivos de entorno. SOLO se versiona .env.example.
+/.env
+/.env.prod
+/api/.env
+/web/.env
+
+# Cache y compilacion
+/api/bootstrap/cache/*.php
+/api/storage/framework/cache/*
+/api/storage/framework/sessions/*
+/api/storage/framework/views/*
+/api/storage/logs/*
+/api/.phpunit.cache/
+/web/dist/
+
+# Sistema
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Certificados y llaves. No deberían existir nunca aca: si aparecen, es una
+# alarma.
+/id_rsa
+/cert.p12
+*.pem
